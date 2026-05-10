@@ -1,5 +1,6 @@
 import requests
 import time
+import subprocess
 
 TOKEN = "8738323399:AAEisCBZay6ChA7ghLCfbyt7syG_KxT2AGw"
 ADMIN_ID = 7939923484
@@ -15,6 +16,20 @@ def send(chat_id, text):
         BASE_URL + "/sendMessage",
         data={"chat_id": chat_id, "text": text}
     )
+
+
+def run_script(filename):
+    try:
+        path = f"deploy/{filename}"
+        result = subprocess.check_output(
+            ["python3", path],
+            stderr=subprocess.STDOUT,
+            text=True,
+            timeout=20
+        )
+        return result
+    except Exception as e:
+        return str(e)
 
 
 def get_updates():
@@ -56,21 +71,33 @@ while True:
                     send(chat_id, "System unlocked 🔓 Welcome sir")
                     send(chat_id, "All systems running ⚙️")
                 else:
-                    send(chat_id, "System locked. Send /start")
+                    send(chat_id, "System locked. Use /start")
                 continue
 
-            # ⚙️ COMMANDS (UNLOCKED STATE)
-            if text == "/ping":
+            # ⚙️ COMMANDS
+            if text.startswith("/deploy"):
+                parts = text.split()
+
+                if len(parts) < 2:
+                    send(chat_id, "Usage: /deploy filename.py")
+                    continue
+
+                filename = parts[1]
+                output = run_script(filename)
+
+                send(chat_id, f"📦 Output:\n{output}")
+
+            elif text == "/ping":
                 send(chat_id, "pong 🟢")
 
             elif text == "/status":
-                send(chat_id, "System running 24/7 ☁️")
+                send(chat_id, "System running ☁️")
 
             elif text == "/lock":
                 locked = True
                 send(chat_id, "System locked 🔒")
 
             else:
-                send(chat_id, "Commands: /ping /status /lock")
+                send(chat_id, "Commands: /deploy /ping /status /lock")
 
     time.sleep(2)
