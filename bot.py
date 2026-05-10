@@ -3,6 +3,7 @@ import time
 import os
 import json
 import subprocess
+import threading
 
 TOKEN = "8738323399:AAEisCBZay6ChA7ghLCfbyt7syG_KxT2AGw"
 ADMIN_ID = 7939923484
@@ -17,7 +18,7 @@ upload_mode = False
 DB_FILE = "db.json"
 
 # =========================
-# STORAGE
+# 💾 DATABASE
 # =========================
 def load_db():
     if not os.path.exists(DB_FILE):
@@ -36,7 +37,7 @@ apps = load_db()
 processes = {}
 
 # =========================
-# TELEGRAM SEND
+# 📡 SEND MESSAGE
 # =========================
 def send(chat_id, text):
     requests.post(
@@ -45,9 +46,24 @@ def send(chat_id, text):
     )
 
 # =========================
-# START PROCESS
+# ⚙️ RUN SCRIPT (SYNC)
 # =========================
-def run_background(name, path):
+def run_script(path):
+    try:
+        result = subprocess.check_output(
+            ["python3", path],
+            stderr=subprocess.STDOUT,
+            text=True,
+            timeout=30
+        )
+        return result if result else "Executed"
+    except Exception as e:
+        return str(e)
+
+# =========================
+# 🔄 BACKGROUND RUN (REAL PROCESS)
+# =========================
+def run_background(name, path, chat_id):
     process = subprocess.Popen(
         ["python3", path],
         stdout=subprocess.PIPE,
@@ -55,7 +71,10 @@ def run_background(name, path):
         text=True
     )
 
-    processes[name] = process
+    processes[name] = {
+        "process": process,
+        "chat_id": chat_id
+    }
 
     apps[name] = {
         "path": path,
@@ -65,43 +84,42 @@ def run_background(name, path):
 
     save_db(apps)
 
+    send(chat_id, f"🔄 {name} running PID {process.pid}")
+
+    # =========================
+    # 🌙 WATCHER (sleep detection)
+    # =========================
+    def watcher():
+        process.wait()
+        send(chat_id, f"🌙 {name} stopped / sleeping 😴")
+        if name in apps:
+            apps[name]["status"] = "stopped"
+            save_db(apps)
+
+    threading.Thread(target=watcher, daemon=True).start()
+
 # =========================
-# STOP / DELETE PROCESS
+# 🗑️ DELETE (REAL KILL)
 # =========================
 def delete_app(name):
-    if name in apps:
+    if name in processes:
         try:
-            if name in processes:
-                processes[name].terminate()
-                processes[name].kill()
-                del processes[name]
-
-            del apps[name]
-            save_db(apps)
-            return True
+            p = processes[name]["process"]
+            p.terminate()
+            p.kill()
+            del processes[name]
         except:
-            return False
+            pass
+
+    if name in apps:
+        del apps[name]
+        save_db(apps)
+        return True
+
     return False
 
 # =========================
-# LIVE LOGS
-# =========================
-def get_logs(name):
-    if name not in processes:
-        return "No process"
-
-    p = processes[name]
-
-    try:
-        output = p.stdout.readline()
-        if output:
-            return output.strip()
-        return "No logs yet"
-    except:
-        return "Log error"
-
-# =========================
-# UPDATES
+# 🔄 UPDATES
 # =========================
 def get_updates():
     global last_update_id
@@ -113,7 +131,7 @@ def get_updates():
     return requests.get(url).json()
 
 # =========================
-# BOOT
+# 🚀 BOOT
 # =========================
 def boot():
     send(ADMIN_ID,
@@ -127,7 +145,7 @@ def boot():
 boot()
 
 # =========================
-# LOOP
+# 🧠 MAIN LOOP
 # =========================
 while True:
     data = get_updates()
@@ -144,23 +162,25 @@ while True:
             user_id = msg["from"]["id"]
             text = msg.get("text", "")
 
-            # ADMIN ONLY
+            # 🔐 ADMIN CHECK
             if user_id != ADMIN_ID:
                 send(chat_id, "Access denied 🚫")
                 continue
 
-            # LOCK SYSTEM
+            # 🔒 LOCK SYSTEM
             if locked:
                 if text == "/start":
                     send(chat_id, "Enter security code 🔐")
                 elif text == SECURITY_CODE:
                     locked = False
-                    send(chat_id, "🔓 SYSTEM UNLOCKED")
+                    send(chat_id, "🔓 SYSTEM UNLOCKED 🚀")
                 else:
-                    send(chat_id, "Locked 🔒")
+                    send(chat_id, "System locked 🔒")
                 continue
 
-            # UPLOAD
+            # =========================
+            # 📤 UPLOAD
+            # =========================
             if text == "/upload":
                 upload_mode = True
                 send(chat_id, "Send Python code 📤")
@@ -177,27 +197,36 @@ while True:
                 send(chat_id, "Uploaded 🚀 Use /runbg name uploaded.py")
                 continue
 
-            # RUN BACKGROUND
+            # =========================
+            # 🚀 RUN BG
+            # =========================
             if text.startswith("/runbg"):
                 parts = text.split()
+
+                if len(parts) < 3:
+                    send(chat_id, "Usage: /runbg name file.py")
+                    continue
+
                 name = parts[1]
                 file = parts[2]
-
                 path = f"deploy/{file}"
-                run_background(name, path)
 
-                send(chat_id, f"🔄 {name} running PID {apps[name]['pid']}")
+                run_background(name, path, chat_id)
 
-            # DELETE (FULL KILL)
+            # =========================
+            # 🗑️ DELETE
+            # =========================
             elif text.startswith("/delete"):
                 name = text.split()[1]
 
                 if delete_app(name):
-                    send(chat_id, f"🗑️ {name} stopped completely")
+                    send(chat_id, f"🗑️ {name} fully stopped")
                 else:
                     send(chat_id, "Not found ❌")
 
-            # DASHBOARD
+            # =========================
+            # 📊 DASHBOARD
+            # =========================
             elif text == "/dashboard":
                 if not apps:
                     send(chat_id, "No apps running")
@@ -209,11 +238,6 @@ while True:
 
                     send(chat_id, "📊 DASHBOARD\n" + msg_out)
 
-            # LOGS
-            elif text.startswith("/logs"):
-                name = text.split()[1]
-                send(chat_id, get_logs(name))
-
             elif text == "/ping":
                 send(chat_id, "pong 🟢")
 
@@ -223,10 +247,6 @@ while True:
 
             else:
                 send(chat_id,
-                     "/upload\n"
-                     "/runbg name file.py\n"
-                     "/delete name\n"
-                     "/dashboard\n"
-                     "/logs name")
+                     "/upload\n/runbg\n/delete\n/dashboard\n/ping")
 
     time.sleep(2)
