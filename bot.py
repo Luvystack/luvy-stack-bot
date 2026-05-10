@@ -135,7 +135,7 @@ def get_updates():
 # =========================
 def boot():
     send(ADMIN_ID,
-         "🟢 LUWY STACK ENGINE ONLINE\n"
+         "🟢 LUVY STACK ENGINE ONLINE\n"
          "━━━━━━━━━━━━━━\n"
          "System: Awake 🔓\n"
          "Deploy: Active 🚀\n"
