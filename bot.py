@@ -13,12 +13,12 @@ BASE_URL = f"https://api.telegram.org/bot{TOKEN}"
 last_update_id = None
 locked = True
 
-# 🧠 system state
-system_alive = True
+# 📦 registry of running apps
+apps_registry = {}
 
 
 # =========================
-# 🔔 TELEGRAM SENDER
+# SEND MESSAGE
 # =========================
 def send(chat_id, text):
     requests.post(
@@ -28,79 +28,54 @@ def send(chat_id, text):
 
 
 # =========================
-# ⚙️ RUN SCRIPT (foreground)
+# RUN SCRIPT (foreground)
 # =========================
-def run_script(filename):
+def run_script(path):
     try:
-        path = f"deploy/{filename}"
         result = subprocess.check_output(
             ["python3", path],
             stderr=subprocess.STDOUT,
             text=True,
             timeout=30
         )
-        return result if result else "Executed (no output)"
+        return result if result else "Executed"
     except Exception as e:
         return str(e)
 
 
 # =========================
-# 🔄 BACKGROUND SERVICE RUNNER
+# BACKGROUND RUNNER
 # =========================
-def run_background(path):
+def run_background(name, path):
     def target():
         try:
             exec(open(path).read(), {})
         except Exception as e:
-            print("BG ERROR:", e)
+            print(f"[{name}] ERROR:", e)
 
     thread = threading.Thread(target=target)
     thread.daemon = True
     thread.start()
 
-
-# =========================
-# 🔁 HEARTBEAT SYSTEM
-# =========================
-def heartbeat():
-    global system_alive
-    while True:
-        system_alive = True
-        time.sleep(10)
-
-
-threading.Thread(target=heartbeat, daemon=True).start()
+    apps_registry[name] = {
+        "path": path,
+        "status": "running",
+        "thread": thread
+    }
 
 
 # =========================
-# 🚀 ON START MESSAGE (WAKE UP)
+# DELETE APP
 # =========================
-def system_boot_message():
-    try:
-        msg = (
-            "🟢 Luvy Stack System Online\n"
-            "━━━━━━━━━━━━━━━━━━━━━━\n"
-            "🔓 Status: Awake\n"
-            "⚙️ Engine: Running Stable\n"
-            "📡 Mode: Cloud Execution Active\n"
-            "🔄 Ready: Accepting Deployments\n"
-            "━━━━━━━━━━━━━━━━━━━━━━\n"
-            "Send /start to unlock system."
-        )
-        # broadcast to admin only (you can expand later)
-        requests.post(
-            BASE_URL + "/sendMessage",
-            data={"chat_id": ADMIN_ID, "text": msg}
-        )
-    except:
-        pass
-
-
-system_boot_message()
+def delete_app(name):
+    if name in apps_registry:
+        del apps_registry[name]
+        return True
+    return False
 
 
 # =========================
-# 🔄 TELEGRAM POLLING
+# TELEGRAM POLLING
 # =========================
 def get_updates():
     global last_update_id
@@ -113,7 +88,7 @@ def get_updates():
 
 
 # =========================
-# 🧠 MAIN LOOP
+# MAIN LOOP
 # =========================
 while True:
     data = get_updates()
@@ -130,7 +105,7 @@ while True:
             user_id = msg["from"]["id"]
             text = msg.get("text", "")
 
-            # 🔐 ADMIN ONLY
+            # 🔐 ADMIN CHECK
             if user_id != ADMIN_ID:
                 send(chat_id, "Access denied 🚫")
                 continue
@@ -138,79 +113,102 @@ while True:
             # 🔒 LOCK SYSTEM
             if locked:
                 if text == "/start":
-                    send(chat_id, "🔐 Enter security code to unlock system")
+                    send(chat_id, "Enter security code 🔐")
                 elif text == SECURITY_CODE:
                     locked = False
-
                     send(chat_id,
                          "🔓 SYSTEM UNLOCKED\n"
-                         "━━━━━━━━━━━━━━\n"
-                         "Welcome back sir.\n"
-                         "All systems are now active ⚙️\n"
-                         "Monitoring services enabled 📡\n"
-                         "Deploy engine ready 🚀"
+                         "Deploy engine active 🚀\n"
+                         "Multi-app system ready ⚙️"
                     )
                 else:
                     send(chat_id, "System locked. Use /start")
                 continue
 
-            # ⚙️ DEPLOY SYSTEM
+            # =========================
+            # 🚀 DEPLOY NAMED APP
+            # =========================
             if text.startswith("/deploy"):
                 parts = text.split()
 
-                if len(parts) < 2:
-                    send(chat_id, "Usage: /deploy filename.py")
+                if len(parts) < 3:
+                    send(chat_id, "Usage: /deploy appname file.py")
                     continue
 
-                filename = parts[1]
-                output = run_script(filename)
+                name = parts[1]
+                file = parts[2]
+                path = f"deploy/{file}"
 
-                send(chat_id, f"📦 Output:\n{output}")
+                result = run_script(path)
 
-            # 🔄 BACKGROUND SERVICE
+                apps_registry[name] = {
+                    "path": path,
+                    "status": "deployed"
+                }
+
+                send(chat_id, f"📦 App '{name}' deployed\n\n{result}")
+
+            # =========================
+            # 🔄 RUN BACKGROUND APP
+            # =========================
             elif text.startswith("/runbg"):
                 parts = text.split()
 
-                if len(parts) < 2:
-                    send(chat_id, "Usage: /runbg filename.py")
+                if len(parts) < 3:
+                    send(chat_id, "Usage: /runbg appname file.py")
                     continue
 
-                filename = parts[1]
-                path = f"deploy/{filename}"
+                name = parts[1]
+                file = parts[2]
+                path = f"deploy/{file}"
 
-                run_background(path)
+                run_background(name, path)
 
-                send(chat_id, f"🔄 Background service started: {filename}")
+                send(chat_id, f"🔄 App '{name}' running in background")
 
+            # =========================
+            # 🗑️ DELETE APP
+            # =========================
+            elif text.startswith("/delete"):
+                parts = text.split()
+
+                if len(parts) < 2:
+                    send(chat_id, "Usage: /delete appname")
+                    continue
+
+                name = parts[1]
+
+                if delete_app(name):
+                    send(chat_id, f"🗑️ App '{name}' deleted")
+                else:
+                    send(chat_id, "App not found ❌")
+
+            # =========================
             # 📡 STATUS
+            # =========================
             elif text == "/status":
                 send(chat_id,
-                     "🟢 SYSTEM STATUS REPORT\n"
-                     "━━━━━━━━━━━━━━━━━━\n"
-                     "Engine: Running\n"
-                     "Deploy: Active\n"
-                     "Background Services: Enabled\n"
-                     "Memory: Stable\n"
-                     "Mode: Cloud Runtime\n"
-                     "━━━━━━━━━━━━━━━━━━"
+                     "🟢 SYSTEM STATUS\n"
+                     f"Apps running: {len(apps_registry)}\n"
+                     "Engine: Active\n"
+                     "Multi-App: Enabled"
                 )
 
-            # 🔒 LOCK
+            # =========================
+            elif text == "/ping":
+                send(chat_id, "pong 🟢")
+
             elif text == "/lock":
                 locked = True
                 send(chat_id, "System locked 🔒")
 
-            # 🟢 PING
-            elif text == "/ping":
-                send(chat_id, "pong 🟢")
-
             else:
                 send(chat_id,
                      "Commands:\n"
-                     "/deploy file.py\n"
-                     "/runbg file.py\n"
-                     "/status\n"
-                     "/lock"
+                     "/deploy name file.py\n"
+                     "/runbg name file.py\n"
+                     "/delete name\n"
+                     "/status"
                 )
 
     time.sleep(2)
