@@ -1,14 +1,16 @@
 import requests
 import time
-import subprocess
+import os
 
 TOKEN = "8738323399:AAEisCBZay6ChA7ghLCfbyt7syG_KxT2AGw"
 ADMIN_ID = 7939923484
+SECURITY_CODE = "200712"
 
 BASE_URL = f"https://api.telegram.org/bot{TOKEN}"
 
 last_update_id = None
 locked = True
+upload_mode = False
 
 
 def send(chat_id, text):
@@ -16,20 +18,6 @@ def send(chat_id, text):
         BASE_URL + "/sendMessage",
         data={"chat_id": chat_id, "text": text}
     )
-
-
-def run_script(filename):
-    try:
-        path = f"deploy/{filename}"
-        result = subprocess.check_output(
-            ["python3", path],
-            stderr=subprocess.STDOUT,
-            text=True,
-            timeout=20
-        )
-        return result
-    except Exception as e:
-        return str(e)
 
 
 def get_updates():
@@ -40,6 +28,15 @@ def get_updates():
         url += f"?offset={last_update_id + 1}"
 
     return requests.get(url).json()
+
+
+def run_script(filename):
+    try:
+        path = f"deploy/{filename}"
+        result = os.popen(f"python3 {path}").read()
+        return result if result else "Executed (no output)"
+    except Exception as e:
+        return str(e)
 
 
 while True:
@@ -66,12 +63,29 @@ while True:
             if locked:
                 if text == "/start":
                     send(chat_id, "Enter security code 🔐")
-                elif text == "200712":
+                elif text == SECURITY_CODE:
                     locked = False
                     send(chat_id, "System unlocked 🔓 Welcome sir")
                     send(chat_id, "All systems running ⚙️")
                 else:
                     send(chat_id, "System locked. Use /start")
+                continue
+
+            # 📤 UPLOAD SYSTEM
+            if text == "/upload":
+                upload_mode = True
+                send(chat_id, "Send your Python code now 📤")
+                continue
+
+            if upload_mode:
+                os.makedirs("deploy", exist_ok=True)
+
+                file_path = "deploy/uploaded.py"
+                with open(file_path, "w") as f:
+                    f.write(text)
+
+                upload_mode = False
+                send(chat_id, "File uploaded 🚀 Use /deploy uploaded.py")
                 continue
 
             # ⚙️ COMMANDS
@@ -98,6 +112,6 @@ while True:
                 send(chat_id, "System locked 🔒")
 
             else:
-                send(chat_id, "Commands: /deploy /ping /status /lock")
+                send(chat_id, "Commands: /upload /deploy /ping /status /lock")
 
     time.sleep(2)
