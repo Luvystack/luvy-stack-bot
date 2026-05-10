@@ -40,7 +40,7 @@ apps = load_db()
 
 
 # =========================
-# 📡 SEND MESSAGE (FIXED SAFE)
+# 📡 SEND MESSAGE (SAFE)
 # =========================
 def send(chat_id, text):
     try:
@@ -50,13 +50,16 @@ def send(chat_id, text):
             timeout=10
         )
     except:
-        print("Send failed")
+        print("Send error")
 
 
 # =========================
-# ⚙️ RUN SCRIPT
+# ⚙️ RUN SCRIPT (FIXED)
 # =========================
 def run_script(path):
+    if not os.path.exists(path):
+        return "❌ File not found"
+
     try:
         result = subprocess.check_output(
             ["python3", path],
@@ -65,6 +68,10 @@ def run_script(path):
             timeout=30
         )
         return result if result else "Executed"
+
+    except subprocess.CalledProcessError as e:
+        return f"❌ Python Error:\n{e.output}"
+
     except Exception as e:
         return str(e)
 
@@ -99,7 +106,7 @@ def delete_app(name):
 
 
 # =========================
-# 🔄 UPDATES (FIXED SAFE)
+# 🔄 UPDATES (SAFE)
 # =========================
 def get_updates():
     global last_update_id
@@ -115,27 +122,24 @@ def get_updates():
 
 
 # =========================
-# 🚀 BOOT MESSAGE (SAFE)
+# 🚀 BOOT MESSAGE
 # =========================
 def boot():
-    try:
-        send(ADMIN_ID,
-             "🟢 LUWY STACK ONLINE\n"
-             "━━━━━━━━━━━━━━\n"
-             "System: Awake 🔓\n"
-             "Engine: Running ⚙️\n"
-             "Deploy: Active 🚀\n"
-             "Database: Loaded 💾"
-        )
-    except:
-        print("Boot failed")
+    send(ADMIN_ID,
+         "🟢 LUWY STACK ONLINE\n"
+         "━━━━━━━━━━━━━━\n"
+         "System: Awake 🔓\n"
+         "Engine: Running ⚙️\n"
+         "Deploy: Active 🚀\n"
+         "Database: Loaded 💾"
+    )
 
 
 boot()
 
 
 # =========================
-# 🧠 MAIN LOOP (SAFE WRAP)
+# 🧠 MAIN LOOP (STABLE)
 # =========================
 while True:
     try:
@@ -184,7 +188,8 @@ while True:
                 if upload_mode:
                     os.makedirs("deploy", exist_ok=True)
 
-                    path = "deploy/uploaded.py"
+                    path = os.path.join("deploy", "uploaded.py")
+
                     with open(path, "w") as f:
                         f.write(text)
 
@@ -203,7 +208,8 @@ while True:
 
                     name = parts[1]
                     file = parts[2]
-                    path = f"deploy/{file}"
+
+                    path = os.path.join("deploy", file)
 
                     output = run_script(path)
 
@@ -223,7 +229,8 @@ while True:
 
                     name = parts[1]
                     file = parts[2]
-                    path = f"deploy/{file}"
+
+                    path = os.path.join("deploy", file)
 
                     run_background(name, path)
 
