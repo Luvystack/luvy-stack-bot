@@ -14,16 +14,20 @@ ADMIN_ID = 7939923484
 BASE_URL = f"https://api.telegram.org/bot{TOKEN}"
 DB_FILE = "storage/apps.json"
 
+# =========================
+# FOLDERS
+# =========================
 os.makedirs("deploy", exist_ok=True)
 os.makedirs("logs", exist_ok=True)
 os.makedirs("storage", exist_ok=True)
 
 # =========================
-# DB
+# DATABASE
 # =========================
 def load_db():
     if not os.path.exists(DB_FILE):
         return {}
+
     try:
         with open(DB_FILE, "r") as f:
             return json.load(f)
@@ -37,13 +41,16 @@ def save_db(data):
 apps = load_db()
 
 # =========================
-# TELEGRAM HELPERS
+# TELEGRAM
 # =========================
 def send(chat_id, text):
     try:
         requests.post(
             BASE_URL + "/sendMessage",
-            data={"chat_id": chat_id, "text": text},
+            data={
+                "chat_id": chat_id,
+                "text": text
+            },
             timeout=10
         )
     except:
@@ -52,21 +59,33 @@ def send(chat_id, text):
 def get_updates(offset=None):
     try:
         url = BASE_URL + "/getUpdates"
+
         if offset:
             url += f"?offset={offset}"
-        return requests.get(url, timeout=10).json()
+
+        r = requests.get(url, timeout=20)
+
+        return r.json()
+
     except:
         return {"result": []}
 
 # =========================
-# SAFETY SCANNER (light)
+# SAFETY SCANNER
 # =========================
 def scan_code(code):
-    blocked = ["rm -rf", "socket", "fork", "kill"]
 
-    for b in blocked:
-        if b in code:
-            return False, f"Blocked: {b}"
+    blocked = [
+        "rm -rf",
+        "fork",
+        "kill",
+        "shutdown",
+        "reboot"
+    ]
+
+    for bad in blocked:
+        if bad in code:
+            return False, f"Blocked keyword: {bad}"
 
     try:
         compile(code, "<string>", "exec")
@@ -76,21 +95,24 @@ def scan_code(code):
     return True, "OK"
 
 # =========================
-# ENGINE CORE
+# DEPLOY ENGINE
 # =========================
 def deploy_app(name, code):
+
     path = f"deploy/{name}.py"
     log_path = f"logs/{name}.log"
 
     ok, reason = scan_code(code)
+
     if not ok:
-        return f"❌ Code blocked\n{reason}"
+        return f"❌ DEPLOY BLOCKED\n{reason}"
 
     try:
         with open(path, "w", encoding="utf-8") as f:
             f.write(code)
-    except:
-        return "❌ Failed to save code"
+
+    except Exception as e:
+        return f"❌ SAVE FAILED\n{e}"
 
     try:
         log_file = open(log_path, "a")
@@ -103,7 +125,7 @@ def deploy_app(name, code):
         )
 
     except Exception as e:
-        return f"❌ Deploy failed: {e}"
+        return f"❌ DEPLOY FAILED\n{e}"
 
     apps[name] = {
         "file": path,
@@ -120,57 +142,78 @@ def deploy_app(name, code):
 # STOP APP
 # =========================
 def stop_app(name):
+
     if name not in apps:
-        return "❌ Not found"
+        return "❌ App not found"
 
     try:
-        os.killpg(os.getpgid(apps[name]["pid"]), signal.SIGTERM)
+        pid = apps[name]["pid"]
+
+        os.killpg(
+            os.getpgid(pid),
+            signal.SIGTERM
+        )
+
         apps[name]["status"] = "stopped"
+
         save_db(apps)
+
         return f"🛑 Stopped: {name}"
-    except:
-        return "❌ Failed"
+
+    except Exception as e:
+        return f"❌ STOP FAILED\n{e}"
 
 # =========================
 # LOGS
 # =========================
 def get_logs(name):
+
     if name not in apps:
         return "❌ App not found"
 
     try:
         with open(apps[name]["log"], "r") as f:
-            return f.read()[-3000:]
-    except:
-        return "No logs yet"
+            data = f.read()
+
+        if not data:
+            return "No logs yet"
+
+        return data[-3500:]
+
+    except Exception as e:
+        return f"❌ LOG ERROR\n{e}"
 
 # =========================
-# LIST APPS
+# DASHBOARD
 # =========================
-def list_apps():
+def dashboard():
+
     if not apps:
-        return "No apps running"
+        return "📦 No apps deployed"
 
-    text = "📦 LUVY STACK DASHBOARD\n━━━━━━━━━━━━━━\n"
+    text = "📦 LUVY STACK DASHBOARD\n"
+    text += "━━━━━━━━━━━━━━\n"
 
-    for k, v in apps.items():
-        text += f"• {k} → {v['status']}\n"
+    for name, app in apps.items():
+        text += f"• {name} → {app['status']}\n"
+
+    text += "━━━━━━━━━━━━━━"
 
     return text
 
 # =========================
-# STATE
+# STATES
 # =========================
 last_update_id = 0
 pending_code = {}
 
-print("⚡ LUVY STACK RUNTIME ENGINE RUNNING")
-
+# =========================
+# MENU
+# =========================
 MENU = """
 ⚡ LUVY STACK ENGINE
 
 Commands:
-• /upload (optional)
 • /deploy name
 • /apps
 • /logs name
@@ -179,87 +222,136 @@ Commands:
 • /ping
 """
 
+print("⚡ LUVY STACK ENGINE ONLINE")
+
 # =========================
 # MAIN LOOP
 # =========================
 while True:
+
     try:
+
         updates = get_updates(last_update_id)
 
         for update in updates.get("result", []):
+
             last_update_id = update["update_id"] + 1
 
             msg = update.get("message")
+
             if not msg:
                 continue
 
             chat_id = msg["chat"]["id"]
             user_id = msg["from"]["id"]
+
             text = msg.get("text", "")
 
+            # =========================
+            # ADMIN ONLY
+            # =========================
             if user_id != ADMIN_ID:
                 send(chat_id, "❌ Access denied")
                 continue
 
+            # =========================
             # START
+            # =========================
             if text == "/start":
-                send(chat_id, MENU)
 
-            # DEPLOY FLOW
+                send(chat_id, MENU)
+                continue
+
+            # =========================
+            # DEPLOY START
+            # =========================
             elif text.startswith("/deploy "):
+
                 name = text.split(" ", 1)[1].strip()
+
+                if not name:
+                    send(chat_id, "Usage: /deploy name")
+                    continue
+
                 pending_code[user_id] = name
+
                 send(chat_id, f"📥 Send code for: {name}")
+                continue
 
+            # =========================
+            # RECEIVE CODE
+            # =========================
             elif user_id in pending_code:
+
                 name = pending_code.pop(user_id)
-                send(chat_id, deploy_app(name, text))
 
-            # OPTIONAL FILE UPLOAD (simple storage only)
-            elif text == "/upload":
-                send(chat_id, "📤 Send .py file")
+                result = deploy_app(name, text)
 
-            elif "document" in msg:
-                file_id = msg["document"]["file_id"]
-                file_name = msg["document"]["file_name"]
+                send(chat_id, result)
+                continue
 
-                r = requests.get(BASE_URL + f"/getFile?file_id={file_id}").json()
-                file_path = r["result"]["file_path"]
-                file_url = f"https://api.telegram.org/file/bot{TOKEN}/{file_path}"
-                code = requests.get(file_url).text
-
-                path = f"deploy/{file_name}"
-                with open(path, "w", encoding="utf-8") as f:
-                    f.write(code)
-
-                send(chat_id, f"✅ Uploaded: {file_name}")
-
+            # =========================
             # APPS
+            # =========================
             elif text == "/apps":
-                send(chat_id, list_apps())
 
+                send(chat_id, dashboard())
+                continue
+
+            # =========================
             # DASHBOARD
+            # =========================
             elif text == "/dashboard":
-                send(chat_id, list_apps())
 
+                send(chat_id, dashboard())
+                continue
+
+            # =========================
             # LOGS
+            # =========================
             elif text.startswith("/logs"):
-                parts = text.split()
-                send(chat_id, get_logs(parts[1]) if len(parts) > 1 else "Usage: /logs name")
 
+                parts = text.split()
+
+                if len(parts) < 2:
+                    send(chat_id, "Usage: /logs name")
+                    continue
+
+                send(chat_id, get_logs(parts[1]))
+                continue
+
+            # =========================
             # STOP
+            # =========================
             elif text.startswith("/stop"):
+
                 parts = text.split()
-                send(chat_id, stop_app(parts[1]) if len(parts) > 1 else "Usage: /stop name")
 
+                if len(parts) < 2:
+                    send(chat_id, "Usage: /stop name")
+                    continue
+
+                send(chat_id, stop_app(parts[1]))
+                continue
+
+            # =========================
             # PING
+            # =========================
             elif text == "/ping":
-                send(chat_id, "pong 🟢 LUVY STACK ONLINE")
 
+                send(chat_id, "pong 🟢")
+                continue
+
+            # =========================
+            # UNKNOWN
+            # =========================
             else:
-                send(chat_id, MENU)
+
+                send(chat_id, "❌ Unknown command")
+                continue
 
     except Exception as e:
-        print("error:", e)
+
+        print("ENGINE ERROR:", e)
 
     time.sleep(2)
