@@ -1,25 +1,25 @@
-import requests
-import time
 import os
 import json
-import threading
+import time
+import requests
 import subprocess
-
-TOKEN = "8738323399:AAEisCBZay6ChA7ghLCfbyt7syG_KxT2AGw"
-ADMIN_ID = 7939923484
-SECURITY_CODE = "200712"
-
-BASE_URL = f"https://api.telegram.org/bot{TOKEN}"
-
-last_update_id = None
-locked = True
-upload_mode = False
-
-DB_FILE = "db.json"
-
+import signal
 
 # =========================
-# 💾 DATABASE
+# CONFIG
+# =========================
+TOKEN = "8738323399:AAEisCBZay6ChA7ghLCfbyt7syG_KxT2AGw"
+ADMIN_ID = 7939923484
+
+BASE_URL = f"https://api.telegram.org/bot{TOKEN}"
+DB_FILE = "storage/apps.json"
+
+os.makedirs("deploy", exist_ok=True)
+os.makedirs("logs", exist_ok=True)
+os.makedirs("storage", exist_ok=True)
+
+# =========================
+# DB
 # =========================
 def load_db():
     if not os.path.exists(DB_FILE):
@@ -30,17 +30,14 @@ def load_db():
     except:
         return {}
 
-
 def save_db(data):
     with open(DB_FILE, "w") as f:
         json.dump(data, f, indent=2)
 
-
 apps = load_db()
 
-
 # =========================
-# 📡 SEND MESSAGE (SAFE)
+# TELEGRAM HELPERS
 # =========================
 def send(chat_id, text):
     try:
@@ -50,246 +47,219 @@ def send(chat_id, text):
             timeout=10
         )
     except:
-        print("Send error")
+        pass
 
-
-# =========================
-# ⚙️ RUN SCRIPT (FIXED)
-# =========================
-def run_script(path):
-    if not os.path.exists(path):
-        return "❌ File not found"
-
-    try:
-        result = subprocess.check_output(
-            ["python3", path],
-            stderr=subprocess.STDOUT,
-            text=True,
-            timeout=30
-        )
-        return result if result else "Executed"
-
-    except subprocess.CalledProcessError as e:
-        return f"❌ Python Error:\n{e.output}"
-
-    except Exception as e:
-        return str(e)
-
-
-# =========================
-# 🔄 BACKGROUND SERVICE
-# =========================
-def run_background(name, path):
-    def target():
-        try:
-            exec(open(path).read(), {})
-        except Exception as e:
-            print(f"[{name}] ERROR:", e)
-
-    thread = threading.Thread(target=target)
-    thread.daemon = True
-    thread.start()
-
-    apps[name] = {"path": path, "status": "running"}
-    save_db(apps)
-
-
-# =========================
-# 🗑️ DELETE APP
-# =========================
-def delete_app(name):
-    if name in apps:
-        del apps[name]
-        save_db(apps)
-        return True
-    return False
-
-
-# =========================
-# 🔄 UPDATES (SAFE)
-# =========================
-def get_updates():
-    global last_update_id
-
+def get_updates(offset=None):
     try:
         url = BASE_URL + "/getUpdates"
-        if last_update_id:
-            url += f"?offset={last_update_id + 1}"
-
+        if offset:
+            url += f"?offset={offset}"
         return requests.get(url, timeout=10).json()
     except:
         return {"result": []}
 
+# =========================
+# SAFETY SCANNER (light)
+# =========================
+def scan_code(code):
+    blocked = ["rm -rf", "socket", "fork", "kill"]
+
+    for b in blocked:
+        if b in code:
+            return False, f"Blocked: {b}"
+
+    try:
+        compile(code, "<string>", "exec")
+    except Exception as e:
+        return False, str(e)
+
+    return True, "OK"
 
 # =========================
-# 🚀 BOOT MESSAGE
+# ENGINE CORE
 # =========================
-def boot():
-    send(ADMIN_ID,
-         "🟢 LUWY STACK ONLINE\n"
-         "━━━━━━━━━━━━━━\n"
-         "System: Awake 🔓\n"
-         "Engine: Running ⚙️\n"
-         "Deploy: Active 🚀\n"
-         "Database: Loaded 💾"
-    )
+def deploy_app(name, code):
+    path = f"deploy/{name}.py"
+    log_path = f"logs/{name}.log"
 
+    ok, reason = scan_code(code)
+    if not ok:
+        return f"❌ Code blocked\n{reason}"
 
-boot()
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(code)
+    except:
+        return "❌ Failed to save code"
 
+    try:
+        log_file = open(log_path, "a")
+
+        process = subprocess.Popen(
+            ["python3", path],
+            stdout=log_file,
+            stderr=log_file,
+            preexec_fn=os.setsid
+        )
+
+    except Exception as e:
+        return f"❌ Deploy failed: {e}"
+
+    apps[name] = {
+        "file": path,
+        "pid": process.pid,
+        "log": log_path,
+        "status": "running"
+    }
+
+    save_db(apps)
+
+    return f"🚀 DEPLOYED: {name}"
 
 # =========================
-# 🧠 MAIN LOOP (STABLE)
+# STOP APP
+# =========================
+def stop_app(name):
+    if name not in apps:
+        return "❌ Not found"
+
+    try:
+        os.killpg(os.getpgid(apps[name]["pid"]), signal.SIGTERM)
+        apps[name]["status"] = "stopped"
+        save_db(apps)
+        return f"🛑 Stopped: {name}"
+    except:
+        return "❌ Failed"
+
+# =========================
+# LOGS
+# =========================
+def get_logs(name):
+    if name not in apps:
+        return "❌ App not found"
+
+    try:
+        with open(apps[name]["log"], "r") as f:
+            return f.read()[-3000:]
+    except:
+        return "No logs yet"
+
+# =========================
+# LIST APPS
+# =========================
+def list_apps():
+    if not apps:
+        return "No apps running"
+
+    text = "📦 LUVY STACK DASHBOARD\n━━━━━━━━━━━━━━\n"
+
+    for k, v in apps.items():
+        text += f"• {k} → {v['status']}\n"
+
+    return text
+
+# =========================
+# STATE
+# =========================
+last_update_id = 0
+pending_code = {}
+
+print("⚡ LUVY STACK RUNTIME ENGINE RUNNING")
+
+MENU = """
+⚡ LUVY STACK ENGINE
+
+Commands:
+• /upload (optional)
+• /deploy name
+• /apps
+• /logs name
+• /stop name
+• /dashboard
+• /ping
+"""
+
+# =========================
+# MAIN LOOP
 # =========================
 while True:
     try:
-        data = get_updates()
+        updates = get_updates(last_update_id)
 
-        if "result" in data:
-            for update in data["result"]:
-                last_update_id = update["update_id"]
+        for update in updates.get("result", []):
+            last_update_id = update["update_id"] + 1
 
-                if "message" not in update:
-                    continue
+            msg = update.get("message")
+            if not msg:
+                continue
 
-                msg = update["message"]
-                chat_id = msg["chat"]["id"]
-                user_id = msg["from"]["id"]
-                text = msg.get("text", "")
+            chat_id = msg["chat"]["id"]
+            user_id = msg["from"]["id"]
+            text = msg.get("text", "")
 
-                # 🔐 ADMIN CHECK
-                if user_id != ADMIN_ID:
-                    send(chat_id, "Access denied 🚫")
-                    continue
+            if user_id != ADMIN_ID:
+                send(chat_id, "❌ Access denied")
+                continue
 
-                # 🔒 LOCK SYSTEM
-                if locked:
-                    if text == "/start":
-                        send(chat_id, "Enter security code 🔐")
-                    elif text == SECURITY_CODE:
-                        locked = False
-                        send(chat_id,
-                             "🔓 SYSTEM UNLOCKED\n"
-                             "All systems active ⚙️\n"
-                             "Ready for deployment 🚀"
-                        )
-                    else:
-                        send(chat_id, "System locked. Use /start")
-                    continue
+            # START
+            if text == "/start":
+                send(chat_id, MENU)
 
-                # =========================
-                # 📤 UPLOAD SYSTEM
-                # =========================
-                if text == "/upload":
-                    upload_mode = True
-                    send(chat_id, "Send Python code now 📤")
-                    continue
+            # DEPLOY FLOW
+            elif text.startswith("/deploy "):
+                name = text.split(" ", 1)[1].strip()
+                pending_code[user_id] = name
+                send(chat_id, f"📥 Send code for: {name}")
 
-                if upload_mode:
-                    os.makedirs("deploy", exist_ok=True)
+            elif user_id in pending_code:
+                name = pending_code.pop(user_id)
+                send(chat_id, deploy_app(name, text))
 
-                    path = os.path.join("deploy", "uploaded.py")
+            # OPTIONAL FILE UPLOAD (simple storage only)
+            elif text == "/upload":
+                send(chat_id, "📤 Send .py file")
 
-                    with open(path, "w") as f:
-                        f.write(text)
+            elif "document" in msg:
+                file_id = msg["document"]["file_id"]
+                file_name = msg["document"]["file_name"]
 
-                    upload_mode = False
-                    send(chat_id, "Uploaded 🚀 Use /deploy uploaded.py")
-                    continue
+                r = requests.get(BASE_URL + f"/getFile?file_id={file_id}").json()
+                file_path = r["result"]["file_path"]
+                file_url = f"https://api.telegram.org/file/bot{TOKEN}/{file_path}"
+                code = requests.get(file_url).text
 
-                # =========================
-                # 🚀 DEPLOY APP
-                # =========================
-                if text.startswith("/deploy"):
-                    parts = text.split()
-                    if len(parts) < 3:
-                        send(chat_id, "Usage: /deploy name file.py")
-                        continue
+                path = f"deploy/{file_name}"
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write(code)
 
-                    name = parts[1]
-                    file = parts[2]
+                send(chat_id, f"✅ Uploaded: {file_name}")
 
-                    path = os.path.join("deploy", file)
+            # APPS
+            elif text == "/apps":
+                send(chat_id, list_apps())
 
-                    output = run_script(path)
+            # DASHBOARD
+            elif text == "/dashboard":
+                send(chat_id, list_apps())
 
-                    apps[name] = {"path": path, "status": "deployed"}
-                    save_db(apps)
+            # LOGS
+            elif text.startswith("/logs"):
+                parts = text.split()
+                send(chat_id, get_logs(parts[1]) if len(parts) > 1 else "Usage: /logs name")
 
-                    send(chat_id, f"📦 {name} deployed\n\n{output}")
+            # STOP
+            elif text.startswith("/stop"):
+                parts = text.split()
+                send(chat_id, stop_app(parts[1]) if len(parts) > 1 else "Usage: /stop name")
 
-                # =========================
-                # 🔄 BACKGROUND RUN
-                # =========================
-                elif text.startswith("/runbg"):
-                    parts = text.split()
-                    if len(parts) < 3:
-                        send(chat_id, "Usage: /runbg name file.py")
-                        continue
+            # PING
+            elif text == "/ping":
+                send(chat_id, "pong 🟢 LUVY STACK ONLINE")
 
-                    name = parts[1]
-                    file = parts[2]
-
-                    path = os.path.join("deploy", file)
-
-                    run_background(name, path)
-
-                    send(chat_id, f"🔄 {name} running in background")
-
-                # =========================
-                # 🗑️ DELETE APP
-                # =========================
-                elif text.startswith("/delete"):
-                    parts = text.split()
-                    if len(parts) < 2:
-                        send(chat_id, "Usage: /delete name")
-                        continue
-
-                    name = parts[1]
-
-                    if delete_app(name):
-                        send(chat_id, f"🗑️ {name} deleted")
-                    else:
-                        send(chat_id, "Not found ❌")
-
-                # =========================
-                # 📊 DASHBOARD
-                # =========================
-                elif text == "/dashboard":
-                    if not apps:
-                        apps_list = "No apps running"
-                    else:
-                        apps_list = "\n".join(
-                            [f"• {k} → {v['status']}" for k, v in apps.items()]
-                        )
-
-                    send(chat_id,
-                         "📊 LUWY DASHBOARD\n"
-                         "━━━━━━━━━━━━━━\n"
-                         f"{apps_list}\n"
-                         "━━━━━━━━━━━━━━\n"
-                         "System Active 🟢"
-                    )
-
-                elif text == "/status":
-                    send(chat_id, "System running ☁️")
-
-                elif text == "/ping":
-                    send(chat_id, "pong 🟢")
-
-                elif text == "/lock":
-                    locked = True
-                    send(chat_id, "System locked 🔒")
-
-                else:
-                    send(chat_id,
-                         "Commands:\n"
-                         "/upload\n"
-                         "/deploy name file.py\n"
-                         "/runbg name file.py\n"
-                         "/delete name\n"
-                         "/dashboard")
+            else:
+                send(chat_id, MENU)
 
     except Exception as e:
-        print("Main loop error:", e)
-        time.sleep(2)
+        print("error:", e)
+
+    time.sleep(2)
